@@ -39,6 +39,18 @@
 前提是 Linux、systemd 用户服务和 Node.js 22 或更新版本。
 安装脚本不会替你安装 Node.js。
 
+安装或更新到最新 Node.js LTS（推荐）：
+
+```bash
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.7/install.sh | bash
+. "$HOME/.nvm/nvm.sh"
+nvm install --lts
+nvm alias default 'lts/*'
+node --version
+```
+
+如果需要最新的 Current 版本，可以将 `nvm install --lts` 改为 `nvm install node`。
+
 从 GitHub 一行安装：
 
 ```bash
