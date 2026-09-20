@@ -39,6 +39,22 @@
 前提是 Linux、systemd 用户服务和支持全局 `fetch`/`WebSocket` 的 Node.js。
 安装脚本不会替你安装 Node.js。
 
+从 GitHub 一行安装：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/detydanesu/btc-monitor-local/main/install-from-github.sh | bash
+```
+
+脚本优先使用 Git；没有 Git 时会改用 `curl` 或 `wget` 下载 GitHub 压缩包。
+它不会覆盖非空的安装目录；更新已有 Git 检出时使用快进更新。
+
+默认代码目录为 `~/.local/share/btc-monitor-local`。需要自定义目录时：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/detydanesu/btc-monitor-local/main/install-from-github.sh \
+  | BTC_MONITOR_INSTALL_DIR="$HOME/apps/btc-monitor-local" bash
+```
+
 在 Linux + systemd 用户环境中：
 
 ```bash
@@ -47,6 +63,16 @@ btc-monitorctl qqbot import
 btc-monitorctl open
 btc-monitorctl status
 ```
+
+安装完成后可以打开交互式控制界面：
+
+```bash
+btc-monitorctl menu
+```
+
+直接运行 `btc-monitorctl` 也会打开菜单。`btc-monitorctl --help` 会显示全部命令。
+
+菜单包含启动、停止、重启、状态、日志、QQ Bot 导入与测试、当前价基准、指定价基准和配置查看。
 
 `qqbot import` 会交互式保存 QQ Bot AppID、Client Secret 和目标 OpenID 到
 `~/.config/btc-realtime-monitor/qqbot.env`，文件权限为 600。目标格式为
@@ -101,5 +127,6 @@ btc-monitorctl test-alert
 - `btc-realtime-monitor.service`：用户级 systemd 单元。
 - `btc-monitor.mjs`：旧版五分钟 REST 轮询实现，仅保留作参考，不由实时服务调用。
 - `install.sh`：生成用户级服务并安装控制命令。
+- `install-from-github.sh`：从 GitHub 拉取或更新代码后执行安装。
 - `btc-monitorctl`：启动、停止、查看服务、导入 QQ Bot 和调整基准价。
 - `scripts/import-qqbot.sh`：安全导入 QQ Bot 凭据。

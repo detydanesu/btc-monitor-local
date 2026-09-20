@@ -6,12 +6,13 @@ SERVICE="btc-realtime-monitor.service"
 NODE_BIN=${NODE_BIN:-node}
 CONFIG_HOME=${XDG_CONFIG_HOME:-"$HOME/.config"}
 ENV_FILE="$CONFIG_HOME/btc-realtime-monitor/qqbot.env"
+
 load_qqbot_env() {
   if [[ -f "$ENV_FILE" ]]; then
-  set -a
-  # shellcheck disable=SC1090
-  source "$ENV_FILE"
-  set +a
+    set -a
+    # shellcheck disable=SC1090
+    source "$ENV_FILE"
+    set +a
   fi
 }
 
@@ -19,19 +20,25 @@ usage() {
   cat <<'EOF'
 Usage: btc-monitorctl COMMAND [ARGS]
 
+Run `btc-monitorctl` without a command in a terminal to open the interactive
+control menu. Use `btc-monitorctl menu` to open it explicitly.
+
 Service commands:
   open|start       Start the monitor service
   close|stop       Stop the monitor service
   restart          Restart the monitor service
   status           Show service status
   logs             Follow recent service logs
+  menu|setup       Open the interactive control menu
 
 Monitor commands:
   test-alert       Send a labelled QQ Bot test message
   once             Fetch and evaluate one snapshot
-  baseline show   Show the saved baseline
-  baseline current
-                   Set the baseline to the current market price
+  rules            Show the active day/night alert rules
+  config show      Show safe configuration values (secrets are hidden)
+  config edit      Edit config.json with $EDITOR
+  baseline show    Show the saved baseline
+  baseline current Set the baseline to the current market price
   baseline PRICE   Set the baseline to an explicit positive price
   qqbot import     Import QQ Bot credentials and target OpenID
   qqbot test       Send a labelled QQ Bot test message
@@ -46,10 +53,12 @@ set_baseline() {
     systemctl --user stop "$SERVICE"
   fi
 
-  set +e
-  "$NODE_BIN" "$APP_DIR/btc-realtime-monitor.mjs" --config "$APP_DIR/config.json" --set-baseline "$value"
-  local result=$?
-  set -e
+  local result
+  if "$NODE_BIN" "$APP_DIR/btc-realtime-monitor.mjs" --config "$APP_DIR/config.json" --set-baseline "$value"; then
+    result=0
+  else
+    result=$?
+  fi
 
   if [[ "$was_active" == "1" ]]; then
     systemctl --user start "$SERVICE"
@@ -57,14 +66,198 @@ set_baseline() {
   return "$result"
 }
 
+test_alert() {
+  load_qqbot_env
+  "$NODE_BIN" "$APP_DIR/btc-realtime-monitor.mjs" --config "$APP_DIR/config.json" --test-alert "$@"
+}
+
+show_once() {
+  load_qqbot_env
+  "$NODE_BIN" "$APP_DIR/btc-realtime-monitor.mjs" --config "$APP_DIR/config.json" --once "$@"
+}
+
+show_rules() {
+  CONFIG_PATH="$APP_DIR/config.json" "$NODE_BIN" <<'NODE'
+const fs = require("node:fs");
+const config = JSON.parse(fs.readFileSync(process.env.CONFIG_PATH, "utf8"));
+const day = config.day ?? {};
+const night = config.night ?? {};
+const pct = (value) => `${value ?? "not set"}%`;
+const period = (name, rules) => {
+  console.log(`${name}:`);
+  console.log(`  Baseline movement: ±${pct(rules.baselineThresholdPct)}`);
+  console.log(`  Rolling 5-minute movement: ±${pct(rules.rolling5mThresholdPct)}`);
+};
+
+console.log(`Symbol: ${config.symbol ?? "BTCUSDT"}`);
+console.log(`Timezone: ${config.timezone ?? "system default"}`);
+console.log("Day period: 06:40–22:59");
+period("Day rules", day);
+console.log(`Night period: ${night.start ?? "23:00"}–${night.end ?? "06:40"}`);
+period("Night rules", night);
+console.log(`Rolling window: ${Math.round((config.rollingWindowMs ?? 300000) / 60000)} minutes`);
+console.log(`Rolling rearm ratio: ${config.rollingRearmRatio ?? "not set"}`);
+console.log(`Rolling escalation step: ${pct(config.rollingEscalationStepPct)}`);
+NODE
+}
+
+show_config() {
+  CONFIG_PATH="$APP_DIR/config.json" "$NODE_BIN" <<'NODE'
+const fs = require("node:fs");
+const config = JSON.parse(fs.readFileSync(process.env.CONFIG_PATH, "utf8"));
+const qq = config.qqBot ?? {};
+const safe = {
+  symbol: config.symbol,
+  marketApiBase: config.marketApiBase,
+  marketWsUrl: config.marketWsUrl,
+  alertProvider: config.alertProvider,
+  qqTarget: config.qqTarget ?? qq.target,
+  qqBotApiBase: qq.apiBaseUrl,
+  qqBotAuthUrl: qq.authUrl,
+  timezone: config.timezone,
+  stateFile: config.stateFile,
+  runtimeStateFile: config.runtimeStateFile,
+  configPath: process.env.CONFIG_PATH,
+};
+for (const [key, value] of Object.entries(safe)) {
+  console.log(`${key}: ${value ?? "not set"}`);
+}
+console.log("QQ Bot AppID and Client Secret: stored in the protected environment file");
+NODE
+}
+
+edit_config() {
+  local editor=${EDITOR:-vi}
+  if ! command -v "$editor" >/dev/null 2>&1; then
+    echo "Editor '$editor' was not found. Set EDITOR to an installed editor." >&2
+    return 1
+  fi
+  "$editor" "$APP_DIR/config.json"
+  echo "Configuration saved. Restart the service to apply changes: btc-monitorctl restart"
+}
+
+pause_menu() {
+  local ignored
+  read -r -p $'\nPress Enter to return to the menu. ' ignored < /dev/tty || true
+}
+
+run_menu_command() {
+  local label=$1
+  shift
+  echo
+  echo "--- $label ---"
+  if "$@"; then
+    :
+  else
+    echo "The command did not complete successfully." >&2
+  fi
+  pause_menu
+}
+
+baseline_menu() {
+  while true; do
+    echo
+    echo "Baseline"
+    echo "  1) Show current baseline"
+    echo "  2) Set baseline to the current BTC price"
+    echo "  3) Set baseline to a specific price"
+    echo "  b) Back"
+    local choice price
+    read -r -p "Choose an option: " choice < /dev/tty || return
+    case "$choice" in
+      1) run_menu_command "Current baseline" "$NODE_BIN" "$APP_DIR/btc-realtime-monitor.mjs" --config "$APP_DIR/config.json" --show-baseline ;;
+      2) run_menu_command "Set baseline to current price" set_baseline current ;;
+      3)
+        read -r -p "Baseline price (positive number): " price < /dev/tty || return
+        run_menu_command "Set baseline" set_baseline "$price"
+        ;;
+      b|B|q|Q) return ;;
+      *) echo "Choose 1, 2, 3, or b." ;;
+    esac
+  done
+}
+
+config_menu() {
+  while true; do
+    echo
+    echo "Rules and configuration"
+    echo "  1) Show alert rules"
+    echo "  2) Show safe configuration"
+    echo "  3) Edit config.json"
+    echo "  b) Back"
+    local choice
+    read -r -p "Choose an option: " choice < /dev/tty || return
+    case "$choice" in
+      1) run_menu_command "Alert rules" show_rules ;;
+      2) run_menu_command "Safe configuration" show_config ;;
+      3) run_menu_command "Edit configuration" edit_config ;;
+      b|B|q|Q) return ;;
+      *) echo "Choose 1, 2, 3, or b." ;;
+    esac
+  done
+}
+
+interactive_menu() {
+  if [[ ! -r /dev/tty ]]; then
+    echo "The interactive menu requires a terminal." >&2
+    return 2
+  fi
+  while true; do
+    cat <<'EOF'
+
+BTC Monitor control menu
+  1) Service status
+  2) Start service
+  3) Stop service
+  4) Restart service
+  5) Import or update QQ Bot credentials
+  6) Send a QQ Bot test alert
+  7) Baseline price
+  8) Rules and configuration
+  9) View service logs
+  0) Exit
+EOF
+    local choice
+    read -r -p "Choose an option: " choice < /dev/tty || return 0
+    case "$choice" in
+      1) run_menu_command "Service status" systemctl --user status "$SERVICE" --no-pager ;;
+      2) run_menu_command "Start service" systemctl --user start "$SERVICE" ;;
+      3) run_menu_command "Stop service" systemctl --user stop "$SERVICE" ;;
+      4) run_menu_command "Restart service" systemctl --user restart "$SERVICE" ;;
+      5) run_menu_command "Import QQ Bot credentials" "$APP_DIR/scripts/import-qqbot.sh" ;;
+      6) run_menu_command "QQ Bot test alert" test_alert ;;
+      7) baseline_menu ;;
+      8) config_menu ;;
+      9) run_menu_command "Service logs (Ctrl-C to return)" journalctl --user -u "$SERVICE" -n 100 -f ;;
+      0|q|Q) return 0 ;;
+      *) echo "Choose a number from 0 to 9." ;;
+    esac
+  done
+}
+
 if [[ $# -lt 1 ]]; then
+  if [[ -r /dev/tty && -t 1 ]]; then
+    interactive_menu
+    exit $?
+  fi
   usage
   exit 2
+fi
+
+if [[ "$1" == "-h" || "$1" == "--help" ]]; then
+  usage
+  exit 0
 fi
 
 command=$1
 shift
 case "$command" in
+  menu|interactive|setup|configure)
+    interactive_menu
+    ;;
+  help)
+    usage
+    ;;
   open|start)
     systemctl --user start "$SERVICE"
     ;;
@@ -81,12 +274,30 @@ case "$command" in
     journalctl --user -u "$SERVICE" -n 100 -f "$@"
     ;;
   test-alert)
-    load_qqbot_env
-    exec "$NODE_BIN" "$APP_DIR/btc-realtime-monitor.mjs" --config "$APP_DIR/config.json" --test-alert "$@"
+    test_alert "$@"
     ;;
   once)
-    load_qqbot_env
-    exec "$NODE_BIN" "$APP_DIR/btc-realtime-monitor.mjs" --config "$APP_DIR/config.json" --once "$@"
+    show_once "$@"
+    ;;
+  rules)
+    [[ $# -eq 0 ]] || { echo "Usage: btc-monitorctl rules" >&2; exit 2; }
+    show_rules
+    ;;
+  config)
+    case "${1:-show}" in
+      show)
+        [[ $# -le 1 ]] || { echo "Usage: btc-monitorctl config show|edit" >&2; exit 2; }
+        show_config
+        ;;
+      edit)
+        [[ $# -eq 1 ]] || { echo "Usage: btc-monitorctl config show|edit" >&2; exit 2; }
+        edit_config
+        ;;
+      *)
+        echo "Usage: btc-monitorctl config show|edit" >&2
+        exit 2
+        ;;
+    esac
     ;;
   baseline)
     if [[ $# -ne 1 ]]; then
@@ -97,10 +308,7 @@ case "$command" in
       show)
         exec "$NODE_BIN" "$APP_DIR/btc-realtime-monitor.mjs" --config "$APP_DIR/config.json" --show-baseline
         ;;
-      current)
-        set_baseline "$1"
-        ;;
-      *)
+      current|*)
         set_baseline "$1"
         ;;
     esac
@@ -113,8 +321,7 @@ case "$command" in
         ;;
       test)
         shift
-        load_qqbot_env
-        exec "$NODE_BIN" "$APP_DIR/btc-realtime-monitor.mjs" --config "$APP_DIR/config.json" --test-alert "$@"
+        test_alert "$@"
         ;;
       *)
         echo "Usage: btc-monitorctl qqbot import|test" >&2

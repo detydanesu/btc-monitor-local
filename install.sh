@@ -24,7 +24,7 @@ USER_UNIT_DIR="$CONFIG_HOME/systemd/user"
 LOCAL_BIN="$HOME/.local/bin"
 mkdir -p "$APP_DIR/data" "$APP_CONFIG_DIR" "$USER_UNIT_DIR" "$LOCAL_BIN"
 ENV_FILE="$APP_CONFIG_DIR/qqbot.env"
-chmod 0755 "$APP_DIR/install.sh" "$APP_DIR/btc-monitorctl" "$APP_DIR/scripts"/*.sh
+chmod 0755 "$APP_DIR/install.sh" "$APP_DIR/install-from-github.sh" "$APP_DIR/btc-monitorctl" "$APP_DIR/scripts"/*.sh
 
 # Preserve a baseline created by the previous OpenClaw-based deployment.
 OLD_STATE="${OPENCLAW_STATE_FILE:-$HOME/.openclaw/btc-qq-alert-state.json}"
@@ -83,4 +83,6 @@ fi
 echo "Import QQ Bot credentials with: btc-monitorctl qqbot import"
 echo "Then start the service with: btc-monitorctl open"
 echo "Set the baseline with: btc-monitorctl baseline current"
+echo "Open the interactive control interface with: btc-monitorctl (or btc-monitorctl menu)"
+echo "View the available commands with: btc-monitorctl --help"
 echo "If the service must survive logout, run: loginctl enable-linger $USER"
