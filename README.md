@@ -59,9 +59,15 @@ curl -fsSL https://raw.githubusercontent.com/detydanesu/btc-monitor-local/main/i
 
 ```bash
 bash install.sh
-btc-monitorctl qqbot import
-btc-monitorctl open
-btc-monitorctl status
+~/.local/bin/btc-monitorctl qqbot import
+~/.local/bin/btc-monitorctl open
+~/.local/bin/btc-monitorctl status
+```
+
+如果 `btc-monitorctl` 提示 `command not found`，先执行：
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
 ```
 
 安装完成后可以打开交互式控制界面：

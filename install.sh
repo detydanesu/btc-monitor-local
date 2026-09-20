@@ -83,6 +83,13 @@ fi
 echo "Import QQ Bot credentials with: btc-monitorctl qqbot import"
 echo "Then start the service with: btc-monitorctl open"
 echo "Set the baseline with: btc-monitorctl baseline current"
-echo "Open the interactive control interface with: btc-monitorctl (or btc-monitorctl menu)"
-echo "View the available commands with: btc-monitorctl --help"
+if [[ ":$PATH:" == *":$LOCAL_BIN:"* ]]; then
+  echo "Open the interactive control interface with: btc-monitorctl (or btc-monitorctl menu)"
+  echo "View the available commands with: btc-monitorctl --help"
+else
+  echo "Your current shell does not include $LOCAL_BIN in PATH."
+  echo "Run now: $LOCAL_BIN/btc-monitorctl menu"
+  echo "Enable it for this shell: export PATH=\"$LOCAL_BIN:\$PATH\""
+  echo "Then use: btc-monitorctl menu"
+fi
 echo "If the service must survive logout, run: loginctl enable-linger $USER"
