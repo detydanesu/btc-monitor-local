@@ -46,7 +46,8 @@ curl -fsSL https://raw.githubusercontent.com/detydanesu/btc-monitor-local/main/i
 ```
 
 脚本优先使用 Git；没有 Git 时会改用 `curl` 或 `wget` 下载 GitHub 压缩包。
-它不会覆盖非空的安装目录；更新已有 Git 检出时使用快进更新。
+更新已有 Git 检出时使用快进更新；如果发现同一项目的旧非 Git 安装，
+会更新源代码并保留现有的 `config.json` 和 `data/`。
 
 默认代码目录为 `~/.local/share/btc-monitor-local`。需要自定义目录时：
 
