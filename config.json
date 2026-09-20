@@ -10,6 +10,12 @@
     "appId": "",
     "clientSecret": ""
   },
+  "telegramBot": {
+    "apiBaseUrl": "https://api.telegram.org",
+    "token": "",
+    "chatId": "",
+    "parseMode": ""
+  },
   "stateFile": "./data/baseline-state.json",
   "runtimeStateFile": "./data/realtime-status.json",
   "lockFile": "./data/realtime-monitor.lock",

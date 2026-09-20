@@ -2,7 +2,7 @@
 
 [English version](README.en.md)
 
-这是一个独立、只读市场数据的 Node.js 服务。它不会登录交易所、不会持有交易所 API Key，也不会下单。QQ 预警直接调用 QQ Bot 官方 HTTPS API，不依赖 OpenClaw。
+这是一个独立、只读市场数据的 Node.js 服务。它不会登录交易所、不会持有交易所 API Key，也不会下单。预警可以选择直接调用 QQ Bot 或 Telegram Bot 的 HTTPS API，不依赖 OpenClaw。
 
 ## 实时规则
 
@@ -11,7 +11,7 @@
 - **基准价变化**
   - 上海时间 06:40–22:59：相对基准价涨跌达到 **0.5%**。
   - 上海时间 23:00–06:39：相对基准价涨跌达到 **1.2%**。
-  - QQ 成功送达后才把触发价格保存为新基准；发送失败时保留原基准并重试。
+  - 消息成功送达后才把触发价格保存为新基准；发送失败时保留原基准并重试。
 - **滚动 5 分钟变化**
   - 上海时间 06:40–22:59：涨跌达到 **0.2%**。
   - 上海时间 23:00–06:39：涨跌达到 **0.6%**。
@@ -19,7 +19,7 @@
 
 滚动 5 分钟提醒不设固定通知间隔；基准价变化达到阈值时也会独立立即提醒。
 
-两个条件同时满足时合并成一条 QQ 消息。通知由本地服务直接调用 QQ Bot 官方 HTTPS API。
+两个条件同时满足时合并成一条消息。通知由本地服务直接调用所选 QQ Bot 或 Telegram Bot 的 HTTPS API。
 
 通知标题固定区分为：
 
@@ -34,7 +34,7 @@
 - WebSocket 不可用期间，每 5 秒尝试用 REST 更新价格和完整滚动窗口；连续失败时自动退避，最多 60 秒。
 - 状态通过临时文件加原子重命名写入；锁文件阻止两个实例同时运行。
 - 运行状态在 `data/realtime-status.json`；systemd 日志可用 `journalctl --user -u btc-realtime-monitor.service` 查看。
-- 通知是“至少一次”语义：极少数情况下，如果进程恰好在 QQ 已送达但状态尚未落盘的瞬间崩溃，重启后可能重复提醒一次；不会因此漏掉预警。
+- 通知是“至少一次”语义：极少数情况下，如果进程恰好在消息已送达但状态尚未落盘的瞬间崩溃，重启后可能重复提醒一次；不会因此漏掉预警。
 
 ## 一键安装与控制
 
@@ -94,7 +94,7 @@ btc-monitorctl menu
 直接运行 `btc-monitorctl` 也会打开菜单。`btc-monitorctl --help` 会显示全部命令。
 可以用 `btc-monitorctl version` 确认当前安装的 GitHub 版本。
 
-菜单包含启动、停止、重启、状态、日志、QQ Bot 导入与测试、当前价基准、指定价基准和配置查看。
+菜单包含启动、停止、重启、状态、日志、QQ Bot/Telegram Bot 导入与测试、提供方选择、当前价基准、指定价基准和配置查看。
 
 `qqbot import` 会交互式保存 QQ Bot AppID、Client Secret 和目标 OpenID 到
 `~/.config/btc-realtime-monitor/qqbot.env`，文件权限为 600。目标格式为
@@ -102,6 +102,20 @@ btc-monitorctl menu
 如果检测到 `~/.openclaw/openclaw.json`，脚本会只读取其中的 QQ Bot AppID 和
 Client Secret 作为迁移默认值；目标 OpenID 仍需确认。
 QQ Bot 主动消息还受 QQ 平台的权限、用户接收设置和频率限制影响。
+
+也可以选择 Telegram Bot：
+
+```bash
+btc-monitorctl telegram import
+btc-monitorctl provider telegram
+btc-monitorctl telegram test
+```
+
+Telegram 凭据保存到 `~/.config/btc-realtime-monitor/telegram.env`，权限为 600。
+目标可以是用户、群组或频道的数字 chat ID，也可以是 `@channelusername`。
+`btc-monitorctl provider telegram` 会把选择保存到权限为 600 的
+`~/.config/btc-realtime-monitor/provider.env`，不会修改 Git 跟踪的 `config.json`。
+也可以手动在 `config.json` 中设置 `"alertProvider": "telegram"`。
 
 服务控制命令：
 
@@ -112,6 +126,9 @@ btc-monitorctl restart
 btc-monitorctl status
 btc-monitorctl logs
 btc-monitorctl test-alert
+btc-monitorctl provider qqbot-http
+btc-monitorctl provider telegram
+btc-monitorctl telegram test
 ```
 
 调整基准价：
@@ -143,7 +160,7 @@ btc-monitorctl test-alert
 
 ## 文件
 
-- `btc-realtime-monitor.mjs`：实时服务。
+- `btc-realtime-monitor.mjs`：实时服务、QQ Bot 和 Telegram Bot HTTP 客户端。
 - `btc-realtime-monitor.test.mjs`：无网络、无消息发送的单元测试。
 - `config.json`：阈值、QQ 目标、网络与重试参数。
 - `btc-realtime-monitor.service`：用户级 systemd 单元。
@@ -152,3 +169,4 @@ btc-monitorctl test-alert
 - `install-from-github.sh`：从 GitHub 拉取或更新代码后执行安装。
 - `btc-monitorctl`：启动、停止、查看服务、导入 QQ Bot 和调整基准价。
 - `scripts/import-qqbot.sh`：安全导入 QQ Bot 凭据。
+- `scripts/import-telegram.sh`：安全导入 Telegram Bot token 和 chat ID。

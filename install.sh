@@ -26,6 +26,8 @@ USER_UNIT_DIR="$CONFIG_HOME/systemd/user"
 LOCAL_BIN="$HOME/.local/bin"
 mkdir -p "$APP_DIR/data" "$APP_CONFIG_DIR" "$USER_UNIT_DIR" "$LOCAL_BIN"
 ENV_FILE="$APP_CONFIG_DIR/qqbot.env"
+TELEGRAM_ENV_FILE="$APP_CONFIG_DIR/telegram.env"
+PROVIDER_ENV_FILE="$APP_CONFIG_DIR/provider.env"
 chmod 0755 "$APP_DIR/install.sh" "$APP_DIR/install-from-github.sh" "$APP_DIR/btc-monitorctl" "$APP_DIR/scripts"/*.sh
 
 # Preserve a baseline created by the previous OpenClaw-based deployment.
@@ -39,7 +41,7 @@ fi
 UNIT_PATH="$USER_UNIT_DIR/btc-realtime-monitor.service"
 cat >"$UNIT_PATH" <<EOF
 [Unit]
-Description=BTC real-time QQ Bot alert monitor
+Description=BTC real-time alert monitor
 After=network-online.target
 Wants=network-online.target
 
@@ -48,6 +50,8 @@ Type=simple
 WorkingDirectory=$APP_DIR
 ExecStart=$NODE_BIN $APP_DIR/btc-realtime-monitor.mjs --config $APP_DIR/config.json
 EnvironmentFile=-$ENV_FILE
+EnvironmentFile=-$TELEGRAM_ENV_FILE
+EnvironmentFile=-$PROVIDER_ENV_FILE
 Restart=always
 RestartSec=3
 TimeoutStopSec=15
@@ -76,13 +80,34 @@ systemctl --user daemon-reload
 systemctl --user enable btc-realtime-monitor.service
 
 echo
-if [[ -f "$ENV_FILE" ]]; then
+ALERT_PROVIDER=$(CONFIG_PATH="$APP_DIR/config.json" "$NODE_BIN" -e '
+  const fs = require("node:fs");
+  try {
+    const config = JSON.parse(fs.readFileSync(process.env.CONFIG_PATH, "utf8"));
+    process.stdout.write(String(config.alertProvider ?? "qqbot-http"));
+  } catch {
+    process.stdout.write("qqbot-http");
+  }
+')
+if [[ -f "$PROVIDER_ENV_FILE" ]]; then
+  # shellcheck disable=SC1090
+  source "$PROVIDER_ENV_FILE"
+  ALERT_PROVIDER=${BTC_ALERT_PROVIDER:-$ALERT_PROVIDER}
+fi
+if [[ "$ALERT_PROVIDER" == "telegram" ]]; then
+  REQUIRED_ENV_FILE="$TELEGRAM_ENV_FILE"
+else
+  REQUIRED_ENV_FILE="$ENV_FILE"
+fi
+if [[ -f "$REQUIRED_ENV_FILE" ]]; then
   systemctl --user start btc-realtime-monitor.service
   echo "Installed and started btc-realtime-monitor.service."
 else
-  echo "Installed the service but did not start it because QQ Bot credentials are not imported yet."
+  echo "Installed the service but did not start it because $ALERT_PROVIDER credentials are not imported yet."
 fi
 echo "Import QQ Bot credentials with: btc-monitorctl qqbot import"
+echo "Import Telegram credentials with: btc-monitorctl telegram import"
+echo "Select the active provider with: btc-monitorctl provider qqbot-http|telegram"
 echo "Then start the service with: btc-monitorctl open"
 echo "Set the baseline with: btc-monitorctl baseline current"
 if [[ ":$PATH:" == *":$LOCAL_BIN:"* ]]; then

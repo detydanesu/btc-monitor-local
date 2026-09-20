@@ -1,5 +1,5 @@
 [Unit]
-Description=BTC real-time Binance WebSocket QQ Bot alert monitor
+Description=BTC real-time Binance WebSocket alert monitor
 Documentation=file:///home/detydanesu/.openclaw/workspace/btc-monitor-local/README.md
 After=network-online.target
 Wants=network-online.target
@@ -9,6 +9,8 @@ Type=simple
 WorkingDirectory=/home/detydanesu/.openclaw/workspace/btc-monitor-local
 ExecStart=/usr/bin/node /home/detydanesu/.openclaw/workspace/btc-monitor-local/btc-realtime-monitor.mjs --config /home/detydanesu/.openclaw/workspace/btc-monitor-local/config.json
 EnvironmentFile=-/home/detydanesu/.config/btc-realtime-monitor/qqbot.env
+EnvironmentFile=-/home/detydanesu/.config/btc-realtime-monitor/telegram.env
+EnvironmentFile=-/home/detydanesu/.config/btc-realtime-monitor/provider.env
 Restart=always
 RestartSec=3
 TimeoutStopSec=15

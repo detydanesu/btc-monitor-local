@@ -103,6 +103,7 @@ export async function loadConfig(configPath = defaultConfigPath) {
   const symbol = String(raw.symbol ?? "BTCUSDT").toUpperCase();
   const streamName = `${symbol.toLowerCase()}@aggTrade`;
   const qqBotRaw = raw.qqBot ?? {};
+  const telegramBotRaw = raw.telegramBot ?? {};
   const qqApiBaseUrl = String(
     configOrEnv(qqBotRaw.apiBaseUrl, "QQBOT_API_BASE", "https://api.bot.qq.com"),
   ).replace(/\/$/u, "");
@@ -123,6 +124,14 @@ export async function loadConfig(configPath = defaultConfigPath) {
       appId: configOrEnv(qqBotRaw.appId, "QQBOT_APP_ID"),
       clientSecret: configOrEnv(qqBotRaw.clientSecret, "QQBOT_CLIENT_SECRET"),
       target: configOrEnv(qqBotRaw.target, "QQBOT_TARGET", configOrEnv(raw.qqTarget, "QQBOT_TARGET", "")),
+    },
+    telegramBot: {
+      apiBaseUrl: String(
+        configOrEnv(telegramBotRaw.apiBaseUrl, "TELEGRAM_API_BASE", "https://api.telegram.org"),
+      ).replace(/\/$/u, ""),
+      token: configOrEnv(telegramBotRaw.token, "TELEGRAM_BOT_TOKEN"),
+      chatId: configOrEnv(telegramBotRaw.chatId, "TELEGRAM_CHAT_ID"),
+      parseMode: configOrEnv(telegramBotRaw.parseMode, "TELEGRAM_PARSE_MODE", ""),
     },
     stateFile: resolveFrom(configDir, String(raw.stateFile ?? "./data/baseline-state.json")),
     runtimeStateFile: resolveFrom(configDir, String(raw.runtimeStateFile ?? "./data/realtime-status.json")),
@@ -155,7 +164,16 @@ export async function loadConfig(configPath = defaultConfigPath) {
     reconnectMaxMs: asPositiveNumber(raw.reconnectMaxMs, 30_000, "reconnectMaxMs"),
   };
 
-  if (!config.qqBot.target) throw new Error("qqBot.target or QQBOT_TARGET is required");
+  if (!["qqbot-http", "telegram"].includes(config.alertProvider)) {
+    throw new Error(`Unsupported alert provider: ${config.alertProvider}; use qqbot-http or telegram`);
+  }
+  if (config.alertProvider === "qqbot-http" && !config.qqBot.target) {
+    throw new Error("qqBot.target or QQBOT_TARGET is required when alertProvider=qqbot-http");
+  }
+  if (config.alertProvider === "telegram") {
+    if (!config.telegramBot.token) throw new Error("telegramBot.token or TELEGRAM_BOT_TOKEN is required when alertProvider=telegram");
+    if (!config.telegramBot.chatId) throw new Error("telegramBot.chatId or TELEGRAM_CHAT_ID is required when alertProvider=telegram");
+  }
   if (!(config.rollingRearmRatio > 0 && config.rollingRearmRatio < 1)) {
     throw new Error("rollingRearmRatio must be between 0 and 1");
   }
@@ -363,6 +381,65 @@ export class QQBotHttpClient {
       this.accessTokenExpiresAt = 0;
       return sendWithToken(true);
     }
+  }
+}
+
+export class TelegramBotHttpClient {
+  constructor(config, timeoutMs = 60_000) {
+    this.config = {
+      apiBaseUrl: "https://api.telegram.org",
+      parseMode: "",
+      ...config,
+    };
+    this.timeoutMs = timeoutMs;
+  }
+
+  async requestJson(url, options = {}) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+    try {
+      const response = await fetch(url, { ...options, signal: controller.signal });
+      const text = await response.text();
+      let body = {};
+      try {
+        body = text ? JSON.parse(text) : {};
+      } catch {
+        body = { raw: text };
+      }
+      if (!response.ok || body?.ok === false) {
+        const detail = body?.description || body?.message || body?.raw || `${response.status} ${response.statusText}`;
+        const error = new Error(`Telegram Bot API ${response.status}: ${detail}`);
+        error.status = response.status;
+        error.body = body;
+        throw error;
+      }
+      return body;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  async sendText(message) {
+    const token = String(this.config.token ?? "").trim();
+    const chatId = String(this.config.chatId ?? "").trim();
+    if (!token || !chatId) {
+      throw new Error("Telegram Bot credentials are missing; run btc-monitorctl telegram import");
+    }
+    const baseUrl = String(this.config.apiBaseUrl || "https://api.telegram.org").replace(/\/$/u, "");
+    const body = {
+      chat_id: chatId,
+      text: String(message),
+      disable_web_page_preview: true,
+    };
+    const parseMode = String(this.config.parseMode ?? "").trim();
+    if (parseMode) body.parse_mode = parseMode;
+    // Telegram bot tokens contain a colon and are already safe in this path
+    // segment; keeping the token literal matches Telegram's documented URL.
+    return this.requestJson(`${baseUrl}/bot${token}/sendMessage`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
   }
 }
 
@@ -630,6 +707,7 @@ export class RealtimeBtcMonitor {
     this.startedAt = new Date().toISOString();
     this.lockOwned = false;
     this.qqClient = new QQBotHttpClient(config.qqBot, config.messageTimeoutMs);
+    this.telegramClient = new TelegramBotHttpClient(config.telegramBot, config.messageTimeoutMs);
   }
 
   log(message) {
@@ -831,13 +909,21 @@ export class RealtimeBtcMonitor {
 
   async sendMessage(message) {
     if (this.dryRun) {
-      console.log(`[dry-run] qqbot -> ${this.config.qqBot.target}\n${message}`);
+      const destination = this.config.alertProvider === "telegram"
+        ? `telegram -> ${this.config.telegramBot?.chatId ?? ""}`
+        : `qqbot -> ${this.config.qqBot.target}`;
+      console.log(`[dry-run] ${destination}\n${message}`);
       return;
     }
-    if (this.config.alertProvider !== "qqbot-http") {
-      throw new Error(`Unsupported alert provider: ${this.config.alertProvider}`);
+    if (this.config.alertProvider === "qqbot-http") {
+      await this.qqClient.sendText(message);
+      return;
     }
-    await this.qqClient.sendText(message);
+    if (this.config.alertProvider === "telegram") {
+      await this.telegramClient.sendText(message);
+      return;
+    }
+    throw new Error(`Unsupported alert provider: ${this.config.alertProvider}`);
   }
 
   async sendTestAlert() {

@@ -2,15 +2,15 @@
 
 [简体中文](README.md) | **English**
 
-This project is a standalone, read-only Node.js monitor for the BTC/USDT market. It does not log in to an exchange, store exchange API keys, place orders, or trade. Alerts are sent directly through the official QQ Bot HTTPS API; OpenClaw is not required.
+This project is a standalone, read-only Node.js monitor for the BTC/USDT market. It does not log in to an exchange, store exchange API keys, place orders, or trade. Alerts are sent directly through the selected QQ Bot or Telegram Bot HTTPS API; OpenClaw is not required.
 
 ## Features
 
 - Watches Binance `BTCUSDT` aggregated trades over WebSocket.
-- Sends QQ Bot alerts when the price moves far enough from the saved baseline or changes enough over a rolling five-minute window.
+- Sends alerts through either QQ Bot or Telegram Bot when the price moves far enough from the saved baseline or changes enough over a rolling five-minute window.
 - Uses REST data to initialize the five-minute history and to continue monitoring while the WebSocket is unavailable.
 - Provides a systemd user service and an interactive control menu.
-- Stores credentials in a mode-600 environment file outside the repository.
+- Stores credentials in mode-600 environment files outside the repository.
 - Keeps the baseline unchanged when an alert delivery fails, so the alert can be retried.
 
 ## Alert rules
@@ -36,8 +36,8 @@ The current message titles are in Chinese:
 
 - Linux with a working systemd user service.
 - Node.js 22 or newer. The monitor uses the built-in `fetch` and `WebSocket` implementations.
-- Network access to Binance and the QQ Bot API.
-- A QQ Bot application with the required permission to send messages to the selected target.
+- Network access to Binance and the selected bot API.
+- A QQ Bot or Telegram Bot with permission to send messages to the selected target.
 
 The installer does not install Node.js. To install the current Node.js LTS with `nvm`:
 
@@ -80,10 +80,12 @@ The installer creates:
 
 - `~/.config/systemd/user/btc-realtime-monitor.service`
 - `~/.config/btc-realtime-monitor/qqbot.env` when QQ Bot credentials are imported
+- `~/.config/btc-realtime-monitor/telegram.env` when Telegram credentials are imported
+- `~/.config/btc-realtime-monitor/provider.env` when the provider is selected with `btc-monitorctl provider`
 - `~/.local/bin/btc-monitorctl`
 - `~/.local/bin/qqbot-import`
 
-The service is enabled but is not started until QQ Bot credentials are available. If the installer reports that `~/.local/bin` is not in `PATH`, run:
+The service is enabled but is not started until credentials for the selected provider are available. If the installer reports that `~/.local/bin` is not in `PATH`, run:
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
@@ -101,7 +103,27 @@ To keep a user service running after logout, enable systemd user lingering:
 loginctl enable-linger "$USER"
 ```
 
-## Configure QQ Bot
+## Configure alert delivery
+
+Choose the active provider with:
+
+```bash
+btc-monitorctl provider qqbot-http
+btc-monitorctl provider telegram
+```
+
+The default provider is `qqbot-http`. Only the selected provider needs credentials.
+The `provider` command stores its selection in the protected `provider.env` file, so it does not modify the tracked `config.json`.
+
+The same setting can be written in `config.json`:
+
+```json
+{
+  "alertProvider": "telegram"
+}
+```
+
+### QQ Bot
 
 Use the interactive importer:
 
@@ -147,6 +169,25 @@ The application also accepts these environment variables, which override matchin
 | `QQBOT_AUTH_URL` | Token URL; default `https://api.bot.qq.com/app/getAppAccessToken` |
 | `BTC_ALERT_PROVIDER` | Alert provider; default `qqbot-http` |
 
+### Telegram Bot
+
+Create a bot with [BotFather](https://t.me/BotFather) and obtain the destination chat ID. The implementation uses Telegram's [`sendMessage`](https://core.telegram.org/bots/api#sendmessage) Bot API method. Import the token and chat ID:
+
+```bash
+btc-monitorctl telegram import
+btc-monitorctl provider telegram
+btc-monitorctl telegram test
+```
+
+The importer stores the credentials in `~/.config/btc-realtime-monitor/telegram.env` with permission `600`. The chat ID can be a numeric user, group, or channel ID, or a Telegram `@channelusername`.
+
+| Variable | Purpose |
+| --- | --- |
+| `TELEGRAM_BOT_TOKEN` | Bot token from BotFather |
+| `TELEGRAM_CHAT_ID` | User, group, or channel chat ID |
+| `TELEGRAM_API_BASE` | API base URL; default `https://api.telegram.org` |
+| `TELEGRAM_PARSE_MODE` | Optional parse mode, such as `HTML` |
+
 ## Start and control the service
 
 After importing credentials, set an initial baseline and start the service:
@@ -166,6 +207,8 @@ btc-monitorctl restart           # restart the service
 btc-monitorctl status            # show service status
 btc-monitorctl logs              # follow recent logs
 btc-monitorctl test-alert        # send a labelled delivery test
+btc-monitorctl telegram test     # test Telegram delivery
+btc-monitorctl provider telegram # select Telegram as the active provider
 btc-monitorctl once --dry-run    # fetch and evaluate one snapshot safely
 btc-monitorctl rules              # show the active day/night rules
 btc-monitorctl config show        # show configuration with secrets hidden
@@ -180,13 +223,13 @@ btc-monitorctl --help             # show all commands
 btc-monitorctl
 ```
 
-The menu includes service status/start/stop/restart, QQ Bot import and testing, baseline management, rules and configuration, and service logs. The explicit form is:
+The menu includes service status/start/stop/restart, QQ Bot and Telegram import/testing, provider selection, baseline management, rules and configuration, and service logs. The explicit form is:
 
 ```bash
 btc-monitorctl menu
 ```
 
-`btc-monitorctl test-alert` uses the same direct QQ Bot delivery path as real alerts. It sends one clearly labelled test message and does not change the baseline or rolling-alert state.
+`btc-monitorctl test-alert` uses the selected provider. `btc-monitorctl telegram test` explicitly tests Telegram. Both send one clearly labelled test message and do not change the baseline or rolling-alert state.
 
 ## Change the baseline
 
@@ -274,8 +317,8 @@ After confirming that the real-time service is working, disable any older five-m
 1. At startup, the monitor fetches Binance one-second candles and the current ticker price to populate roughly five minutes of history.
 2. It subscribes to the Binance `BTCUSDT` aggregated-trade WebSocket.
 3. New prices are sampled and evaluated against the active Shanghai day/night band.
-4. When a rule triggers, the monitor obtains a QQ Bot access token and sends the message directly to the configured user or group endpoint.
-5. The access token is cached and refreshed automatically. A `401` response causes one token refresh and retry.
+4. When a rule triggers, the monitor sends the message directly through the selected QQ Bot or Telegram Bot HTTP API.
+5. QQ access tokens are cached and refreshed automatically. A `401` response causes one token refresh and retry.
 6. The baseline and runtime state are persisted only after successful delivery where appropriate.
 
 The monitor is an alerting service only. Messages include a reminder that they are market-risk notifications and are not investment advice; no trading operation is performed.
@@ -293,18 +336,19 @@ The monitor is an alerting service only. Messages include a reminder that they a
 
 ## Files
 
-- `btc-realtime-monitor.mjs` — real-time monitor and direct QQ Bot HTTP client.
+- `btc-realtime-monitor.mjs` — real-time monitor and direct QQ Bot/Telegram Bot HTTP clients.
 - `btc-realtime-monitor.test.mjs` — tests that do not require network access or message delivery.
 - `config.json` — market, threshold, retry, and state-file settings.
 - `btc-realtime-monitor.service` — example systemd service unit; `install.sh` generates a user-specific unit for the current checkout.
 - `btc-monitor.mjs` — legacy five-minute REST polling implementation retained for reference; it is not used by the real-time service.
 - `install.sh` — installs the user service and control wrappers.
 - `install-from-github.sh` — downloads or updates the project and then runs the installer.
-- `btc-monitorctl` — service control, QQ Bot setup/testing, baseline management, and configuration commands.
+- `btc-monitorctl` — service control, provider setup/testing, baseline management, and configuration commands.
 - `scripts/import-qqbot.sh` — secure QQ Bot credential importer.
+- `scripts/import-telegram.sh` — secure Telegram Bot token and chat ID importer.
 
 ## Security notes
 
-- Do not commit `qqbot.env`, AppIDs, Client Secrets, OpenIDs, or runtime state to a public repository.
-- Keep the QQ Bot Client Secret in the protected environment file instead of placing it in shell history or `config.json`.
-- Limit the QQ Bot application permissions and message targets to what the monitor needs.
+- Do not commit `qqbot.env`, `telegram.env`, `provider.env`, bot tokens, AppIDs, Client Secrets, OpenIDs, chat IDs, or runtime state to a public repository.
+- Keep bot credentials in the protected environment files instead of placing them in shell history or `config.json`.
+- Limit each bot's permissions and message targets to what the monitor needs.

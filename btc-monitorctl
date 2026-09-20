@@ -5,16 +5,24 @@ APP_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 SERVICE="btc-realtime-monitor.service"
 NODE_BIN=${NODE_BIN:-node}
 CONFIG_HOME=${XDG_CONFIG_HOME:-"$HOME/.config"}
-ENV_FILE="$CONFIG_HOME/btc-realtime-monitor/qqbot.env"
+ENV_DIR="$CONFIG_HOME/btc-realtime-monitor"
+ENV_FILE="$ENV_DIR/qqbot.env"
+TELEGRAM_ENV_FILE="$ENV_DIR/telegram.env"
+PROVIDER_ENV_FILE="$ENV_DIR/provider.env"
 
-load_qqbot_env() {
-  if [[ -f "$ENV_FILE" ]]; then
-    set -a
-    # shellcheck disable=SC1090
-    source "$ENV_FILE"
-    set +a
-  fi
+load_alert_env() {
+  set -a
+  # shellcheck disable=SC1090
+  [[ ! -f "$ENV_FILE" ]] || source "$ENV_FILE"
+  # shellcheck disable=SC1090
+  [[ ! -f "$TELEGRAM_ENV_FILE" ]] || source "$TELEGRAM_ENV_FILE"
+  # Provider selection is stored separately so changing it does not modify the tracked config.json.
+  # shellcheck disable=SC1090
+  [[ ! -f "$PROVIDER_ENV_FILE" ]] || source "$PROVIDER_ENV_FILE"
+  set +a
 }
+
+load_qqbot_env() { load_alert_env; }
 
 usage() {
   cat <<'EOF'
@@ -33,7 +41,9 @@ Service commands:
 
 Monitor commands:
   version          Show the installed source revision
-  test-alert       Send a labelled QQ Bot test message
+  provider qqbot-http|telegram
+                    Select the active alert provider
+  test-alert       Send a labelled test message using the active provider
   once             Fetch and evaluate one snapshot
   rules            Show the active day/night alert rules
   config show      Show safe configuration values (secrets are hidden)
@@ -43,6 +53,8 @@ Monitor commands:
   baseline PRICE   Set the baseline to an explicit positive price
   qqbot import     Import QQ Bot credentials and target OpenID
   qqbot test       Send a labelled QQ Bot test message
+  telegram import  Import Telegram Bot token and chat ID
+  telegram test    Send a labelled Telegram Bot test message
 EOF
 }
 
@@ -68,13 +80,36 @@ set_baseline() {
 }
 
 test_alert() {
-  load_qqbot_env
+  load_alert_env
   "$NODE_BIN" "$APP_DIR/btc-realtime-monitor.mjs" --config "$APP_DIR/config.json" --test-alert "$@"
 }
 
 show_once() {
-  load_qqbot_env
+  load_alert_env
   "$NODE_BIN" "$APP_DIR/btc-realtime-monitor.mjs" --config "$APP_DIR/config.json" --once "$@"
+}
+
+set_provider() {
+  local provider=$1
+  case "$provider" in
+    qq|qqbot|qqbot-http) provider=qqbot-http ;;
+    telegram) provider=telegram ;;
+    *)
+      echo "Provider must be qqbot-http or telegram." >&2
+      return 2
+      ;;
+  esac
+  mkdir -p "$ENV_DIR"
+  local temp_file
+  temp_file=$(mktemp "$ENV_DIR/provider.env.XXXXXX")
+  printf "BTC_ALERT_PROVIDER='%s'\n" "$provider" >"$temp_file"
+  chmod 0600 "$temp_file"
+  mv -f -- "$temp_file" "$PROVIDER_ENV_FILE"
+  echo "Alert provider set to $provider."
+  if systemctl --user is-active --quiet "$SERVICE"; then
+    systemctl --user restart "$SERVICE"
+    echo "Restarted $SERVICE to apply the provider change."
+  fi
 }
 
 show_rules() {
@@ -103,18 +138,23 @@ NODE
 }
 
 show_config() {
+  load_alert_env
   CONFIG_PATH="$APP_DIR/config.json" "$NODE_BIN" <<'NODE'
 const fs = require("node:fs");
 const config = JSON.parse(fs.readFileSync(process.env.CONFIG_PATH, "utf8"));
 const qq = config.qqBot ?? {};
+const telegram = config.telegramBot ?? {};
 const safe = {
   symbol: config.symbol,
   marketApiBase: config.marketApiBase,
   marketWsUrl: config.marketWsUrl,
-  alertProvider: config.alertProvider,
+  alertProvider: process.env.BTC_ALERT_PROVIDER || config.alertProvider,
   qqTarget: config.qqTarget ?? qq.target,
   qqBotApiBase: qq.apiBaseUrl,
   qqBotAuthUrl: qq.authUrl,
+  telegramApiBase: telegram.apiBaseUrl,
+  telegramChatId: telegram.chatId,
+  telegramParseMode: telegram.parseMode,
   timezone: config.timezone,
   stateFile: config.stateFile,
   runtimeStateFile: config.runtimeStateFile,
@@ -124,6 +164,7 @@ for (const [key, value] of Object.entries(safe)) {
   console.log(`${key}: ${value ?? "not set"}`);
 }
 console.log("QQ Bot AppID and Client Secret: stored in the protected environment file");
+console.log("Telegram Bot token: stored in the protected environment file");
 NODE
 }
 
@@ -198,6 +239,24 @@ config_menu() {
   done
 }
 
+provider_menu() {
+  while true; do
+    echo
+    echo "Alert provider"
+    echo "  1) QQ Bot"
+    echo "  2) Telegram Bot"
+    echo "  b) Back"
+    local choice
+    read -r -p "Choose an option: " choice < /dev/tty || return
+    case "$choice" in
+      1) run_menu_command "Select QQ Bot" set_provider qqbot-http ;;
+      2) run_menu_command "Select Telegram Bot" set_provider telegram ;;
+      b|B|q|Q) return ;;
+      *) echo "Choose 1, 2, or b." ;;
+    esac
+  done
+}
+
 interactive_menu() {
   if [[ ! -r /dev/tty ]]; then
     echo "The interactive menu requires a terminal." >&2
@@ -212,10 +271,12 @@ BTC Monitor control menu
   3) Stop service
   4) Restart service
   5) Import or update QQ Bot credentials
-  6) Send a QQ Bot test alert
-  7) Baseline price
-  8) Rules and configuration
-  9) View service logs
+  6) Import or update Telegram credentials
+  7) Send a test alert using the active provider
+  8) Select the active alert provider
+  9) Baseline price
+ 10) Rules and configuration
+ 11) View service logs
   0) Exit
 EOF
     local choice
@@ -226,12 +287,14 @@ EOF
       3) run_menu_command "Stop service" systemctl --user stop "$SERVICE" ;;
       4) run_menu_command "Restart service" systemctl --user restart "$SERVICE" ;;
       5) run_menu_command "Import QQ Bot credentials" "$APP_DIR/scripts/import-qqbot.sh" ;;
-      6) run_menu_command "QQ Bot test alert" test_alert ;;
-      7) baseline_menu ;;
-      8) config_menu ;;
-      9) run_menu_command "Service logs (Ctrl-C to return)" journalctl --user -u "$SERVICE" -n 100 -f ;;
+      6) run_menu_command "Import Telegram credentials" "$APP_DIR/scripts/import-telegram.sh" ;;
+      7) run_menu_command "Test active alert provider" test_alert ;;
+      8) provider_menu ;;
+      9) baseline_menu ;;
+      10) config_menu ;;
+      11) run_menu_command "Service logs (Ctrl-C to return)" journalctl --user -u "$SERVICE" -n 100 -f ;;
       0|q|Q) return 0 ;;
-      *) echo "Choose a number from 0 to 9." ;;
+      *) echo "Choose a number from 0 to 11." ;;
     esac
   done
 }
@@ -265,6 +328,10 @@ case "$command" in
     else
       echo "btc-monitor-local (source revision unavailable)"
     fi
+    ;;
+  provider)
+    [[ $# -eq 1 ]] || { echo "Usage: btc-monitorctl provider qqbot-http|telegram" >&2; exit 2; }
+    set_provider "$1"
     ;;
   open|start)
     systemctl --user start "$SERVICE"
@@ -333,6 +400,23 @@ case "$command" in
         ;;
       *)
         echo "Usage: btc-monitorctl qqbot import|test" >&2
+        exit 2
+        ;;
+    esac
+    ;;
+  telegram)
+    case "${1:-}" in
+      import)
+        shift
+        exec "$APP_DIR/scripts/import-telegram.sh" "$@"
+        ;;
+      test)
+        shift
+        load_alert_env
+        BTC_ALERT_PROVIDER=telegram "$NODE_BIN" "$APP_DIR/btc-realtime-monitor.mjs" --config "$APP_DIR/config.json" --test-alert "$@"
+        ;;
+      *)
+        echo "Usage: btc-monitorctl telegram import|test" >&2
         exit 2
         ;;
     esac
