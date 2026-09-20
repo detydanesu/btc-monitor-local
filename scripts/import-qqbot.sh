@@ -13,7 +13,7 @@ APP_ID=${QQBOT_APP_ID:-}
 CLIENT_SECRET=${QQBOT_CLIENT_SECRET:-}
 TARGET=${QQBOT_TARGET:-}
 API_BASE=${QQBOT_API_BASE:-https://api.bot.qq.com}
-AUTH_URL=${QQBOT_AUTH_URL:-https://bots.qq.com/app/getAppAccessToken}
+AUTH_URL=${QQBOT_AUTH_URL:-https://api.bot.qq.com/app/getAppAccessToken}
 OPENCLAW_CONFIG=${OPENCLAW_CONFIG:-}
 TEST=0
 
@@ -35,7 +35,7 @@ Options:
   --client-secret SECRET  QQ Bot Client Secret
   --target TARGET        c2c:OPENID or group:OPENID
   --api-base URL         Default: https://api.bot.qq.com
-  --auth-url URL         Default: https://bots.qq.com/app/getAppAccessToken
+  --auth-url URL         Default: https://api.bot.qq.com/app/getAppAccessToken
   --from-openclaw PATH   Import app credentials from an existing JSON config
   --test                 Send a labelled test alert after importing
 

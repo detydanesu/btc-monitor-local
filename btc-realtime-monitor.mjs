@@ -86,6 +86,17 @@ function configOrEnv(value, envName, fallback = "") {
   return text || fallback;
 }
 
+function normalizeQQAuthUrl(value) {
+  const url = String(value ?? "").trim();
+  // QQ's current official token endpoint is under api.bot.qq.com. Keep
+  // existing installations that still have the retired bots.qq.com URL
+  // working without requiring users to edit their protected env file first.
+  if (url === "https://bots.qq.com/app/getAppAccessToken") {
+    return "https://api.bot.qq.com/app/getAppAccessToken";
+  }
+  return url;
+}
+
 export async function loadConfig(configPath = defaultConfigPath) {
   const raw = JSON.parse(await fs.readFile(configPath, "utf8"));
   const configDir = path.dirname(configPath);
@@ -104,10 +115,10 @@ export async function loadConfig(configPath = defaultConfigPath) {
     qqTarget: configOrEnv(raw.qqTarget, "QQBOT_TARGET", ""),
     qqBot: {
       apiBaseUrl: qqApiBaseUrl,
-      authUrl: String(configOrEnv(
+      authUrl: normalizeQQAuthUrl(configOrEnv(
         qqBotRaw.authUrl,
         "QQBOT_AUTH_URL",
-        "https://bots.qq.com/app/getAppAccessToken",
+        "https://api.bot.qq.com/app/getAppAccessToken",
       )),
       appId: configOrEnv(qqBotRaw.appId, "QQBOT_APP_ID"),
       clientSecret: configOrEnv(qqBotRaw.clientSecret, "QQBOT_CLIENT_SECRET"),
@@ -248,10 +259,14 @@ function parseQQTarget(rawTarget) {
 
 export class QQBotHttpClient {
   constructor(config, timeoutMs = 60_000) {
-    this.config = {
+    const mergedConfig = {
       apiBaseUrl: "https://api.bot.qq.com",
-      authUrl: "https://bots.qq.com/app/getAppAccessToken",
+      authUrl: "https://api.bot.qq.com/app/getAppAccessToken",
       ...config,
+    };
+    this.config = {
+      ...mergedConfig,
+      authUrl: normalizeQQAuthUrl(mergedConfig.authUrl),
     };
     this.timeoutMs = timeoutMs;
     this.accessToken = null;
@@ -300,7 +315,18 @@ export class QQBotHttpClient {
     });
     const token = String(body?.access_token ?? "").trim();
     const expiresIn = Number(body?.expires_in ?? 7200);
-    if (!token) throw new Error("QQ Bot token response did not contain access_token");
+    if (!token) {
+      const code = body?.code ?? body?.err_code ?? body?.error_code;
+      const detail = body?.message ?? body?.msg ?? body?.error_description;
+      const reason = [
+        code === undefined || code === null ? "" : `code=${code}`,
+        detail ? String(detail) : "",
+      ].filter(Boolean).join(", ");
+      const suffix = reason ? ` (${reason})` : "";
+      throw new Error(
+        `QQ Bot token request returned no access_token${suffix}; check AppID, Client Secret, and auth endpoint ${this.config.authUrl}`,
+      );
+    }
     this.accessToken = token;
     this.accessTokenExpiresAt = Date.now() + Math.max((Number.isFinite(expiresIn) ? expiresIn : 7200) * 1000 - 60_000, 1_000);
     return token;

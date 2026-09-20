@@ -40,7 +40,10 @@ async function loadConfig(configPath) {
     messageTimeoutMs: Number(config.messageTimeoutMs ?? 60000),
     qqBot: {
       apiBaseUrl,
-      authUrl: String(process.env.QQBOT_AUTH_URL ?? qqBotRaw.authUrl ?? "https://bots.qq.com/app/getAppAccessToken"),
+      authUrl: String(process.env.QQBOT_AUTH_URL ?? qqBotRaw.authUrl ?? "https://api.bot.qq.com/app/getAppAccessToken").replace(
+        "https://bots.qq.com/app/getAppAccessToken",
+        "https://api.bot.qq.com/app/getAppAccessToken",
+      ),
       appId: String(process.env.QQBOT_APP_ID ?? qqBotRaw.appId ?? ""),
       clientSecret: String(process.env.QQBOT_CLIENT_SECRET ?? qqBotRaw.clientSecret ?? ""),
       target: String(process.env.QQBOT_TARGET ?? qqBotRaw.target ?? config.qqTarget ?? ""),

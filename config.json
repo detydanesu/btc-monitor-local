@@ -6,7 +6,7 @@
   "qqTarget": "c2c:3DEDE3FE842BB440585AF786C3CB5D46",
   "qqBot": {
     "apiBaseUrl": "https://api.bot.qq.com",
-    "authUrl": "https://bots.qq.com/app/getAppAccessToken",
+    "authUrl": "https://api.bot.qq.com/app/getAppAccessToken",
     "appId": "",
     "clientSecret": ""
   },
