@@ -1,0 +1,46 @@
+{
+  "symbol": "BTCUSDT",
+  "marketApiBase": "https://api.binance.com",
+  "marketWsUrl": "wss://stream.binance.com:9443/ws/btcusdt@aggTrade",
+  "alertProvider": "qqbot-http",
+  "qqTarget": "c2c:3DEDE3FE842BB440585AF786C3CB5D46",
+  "qqBot": {
+    "apiBaseUrl": "https://api.bot.qq.com",
+    "authUrl": "https://bots.qq.com/app/getAppAccessToken",
+    "appId": "",
+    "clientSecret": ""
+  },
+  "stateFile": "./data/baseline-state.json",
+  "runtimeStateFile": "./data/realtime-status.json",
+  "lockFile": "./data/realtime-monitor.lock",
+  "timezone": "Asia/Shanghai",
+  "day": {
+    "baselineThresholdPct": 0.5,
+    "rolling5mThresholdPct": 0.2
+  },
+  "night": {
+    "start": "23:00",
+    "end": "06:40",
+    "baselineThresholdPct": 1.2,
+    "rolling5mThresholdPct": 0.6
+  },
+  "rollingWindowMs": 300000,
+  "historySampleIntervalMs": 250,
+  "historyMaxGapMs": 10000,
+  "evaluationIntervalMs": 250,
+  "rollingAlertCooldownMs": 0,
+  "rollingRearmRatio": 0.7,
+  "rollingEscalationStepPct": 0.2,
+  "deliveryRetryMs": 15000,
+  "messageTimeoutMs": 60000,
+  "httpTimeoutMs": 10000,
+  "staleStreamMs": 20000,
+  "restFallbackIntervalMs": 5000,
+  "healthWriteIntervalMs": 30000,
+  "reconnectInitialMs": 1000,
+  "reconnectMaxMs": 30000,
+  "intervalMs": 300000,
+  "baselineThresholdPct": 0.5,
+  "largeMovePct": 1,
+  "majorMovePct": 2
+}
