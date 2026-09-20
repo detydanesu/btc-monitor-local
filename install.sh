@@ -9,7 +9,9 @@ if [[ -z "$NODE_BIN" ]]; then
 fi
 
 if ! "$NODE_BIN" -e 'if (typeof fetch !== "function" || typeof WebSocket !== "function") process.exit(1)'; then
-  echo "This monitor needs a Node.js version with global fetch and WebSocket." >&2
+  NODE_VERSION=$("$NODE_BIN" --version 2>/dev/null || echo "unknown")
+  echo "Node.js $NODE_VERSION is not compatible with this monitor." >&2
+  echo "Install Node.js 22 or newer (the monitor needs global fetch and WebSocket), then run the installer again." >&2
   exit 1
 fi
 

@@ -36,7 +36,7 @@
 
 ## 一键安装与控制
 
-前提是 Linux、systemd 用户服务和支持全局 `fetch`/`WebSocket` 的 Node.js。
+前提是 Linux、systemd 用户服务和 Node.js 22 或更新版本。
 安装脚本不会替你安装 Node.js。
 
 从 GitHub 一行安装：
