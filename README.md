@@ -1,5 +1,7 @@
 # BTC 实时行情预警
 
+[English version](README.en.md)
+
 这是一个独立、只读市场数据的 Node.js 服务。它不会登录交易所、不会持有交易所 API Key，也不会下单。QQ 预警直接调用 QQ Bot 官方 HTTPS API，不依赖 OpenClaw。
 
 ## 实时规则
