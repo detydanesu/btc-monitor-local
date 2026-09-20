@@ -77,6 +77,7 @@ btc-monitorctl menu
 ```
 
 直接运行 `btc-monitorctl` 也会打开菜单。`btc-monitorctl --help` 会显示全部命令。
+可以用 `btc-monitorctl version` 确认当前安装的 GitHub 版本。
 
 菜单包含启动、停止、重启、状态、日志、QQ Bot 导入与测试、当前价基准、指定价基准和配置查看。
 

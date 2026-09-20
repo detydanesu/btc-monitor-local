@@ -38,4 +38,8 @@ else
   fi
 fi
 
+if [[ -d "$INSTALL_DIR/.git" ]] && command -v git >/dev/null 2>&1; then
+  echo "Using source revision $(git -C "$INSTALL_DIR" rev-parse --short HEAD)"
+fi
+
 exec bash "$INSTALL_DIR/install.sh" "$@"

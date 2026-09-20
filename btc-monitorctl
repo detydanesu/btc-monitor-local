@@ -32,6 +32,7 @@ Service commands:
   menu|setup       Open the interactive control menu
 
 Monitor commands:
+  version          Show the installed source revision
   test-alert       Send a labelled QQ Bot test message
   once             Fetch and evaluate one snapshot
   rules            Show the active day/night alert rules
@@ -257,6 +258,13 @@ case "$command" in
     ;;
   help)
     usage
+    ;;
+  version)
+    if command -v git >/dev/null 2>&1 && git -C "$APP_DIR" rev-parse --short HEAD >/dev/null 2>&1; then
+      echo "btc-monitor-local $(git -C "$APP_DIR" rev-parse --short HEAD)"
+    else
+      echo "btc-monitor-local (source revision unavailable)"
+    fi
     ;;
   open|start)
     systemctl --user start "$SERVICE"
