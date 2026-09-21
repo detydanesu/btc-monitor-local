@@ -105,7 +105,9 @@ function testCombinedMessage() {
   assert.match(message, /滚动5分钟/);
   assert.match(message, /WebSocket/);
   assert.match(message, /不会执行交易/);
-  assert.match(message, /^【基准涨跌预警 \+ 5min滚动预警】/u);
+  assert.match(message, /^【BTC ↕双向预警｜基准\+5min】/u);
+  assert.match(message, /基准价方向：↑ 上涨 \+0\.50%/u);
+  assert.match(message, /5分钟方向：↓ 下跌 -0\.25%/u);
   assert.equal((message.match(/预警】/gu) ?? []).length, 1, "simultaneous reasons use one message");
 
   const baselineOnly = buildAlertMessage({
@@ -117,7 +119,7 @@ function testCombinedMessage() {
     baseline: { triggered: true, price: 100_000, changePct: 0.5 },
     rolling: { triggered: false, changePct: 0.25 },
   });
-  assert.match(baselineOnly, /^【基准涨跌预警】/u);
+  assert.match(baselineOnly, /^【BTC ↑上涨预警｜基准】/u);
 
   const rollingOnly = buildAlertMessage({
     timestamp: Date.parse("2026-08-21T04:00:00Z"),
@@ -128,7 +130,7 @@ function testCombinedMessage() {
     baseline: { triggered: false, price: 100_000, changePct: 0.25 },
     rolling: { triggered: true, changePct: 0.25 },
   });
-  assert.match(rollingOnly, /^【5min滚动预警】/u);
+  assert.match(rollingOnly, /^【BTC ↑上涨预警｜5min】/u);
 }
 
 testBandBoundaries();

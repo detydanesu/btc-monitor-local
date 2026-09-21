@@ -26,11 +26,15 @@ The monitor evaluates new prices approximately every 250 ms. A baseline alert is
 
 Rolling five-minute alerts are sent when the threshold is first crossed, the direction changes, or the movement expands significantly. The default re-arm ratio is `0.7`, the escalation step is `0.2%`, and there is no fixed notification cooldown. A baseline alert and a rolling alert that happen together are combined into one QQ message.
 
-The current message titles are in Chinese:
+Each alert now carries an explicit direction marker:
 
-- `【5min滚动预警】` — rolling five-minute condition only.
-- `【基准涨跌预警】` — baseline condition only.
-- `【基准涨跌预警 + 5min滚动预警】` — both conditions.
+- `↑上涨` — price increased.
+- `↓下跌` — price decreased.
+- `↕双向` — the baseline and five-minute conditions point in different directions.
+
+For example, `【BTC ↑上涨预警｜基准】` is an upward baseline alert and
+`【BTC ↕双向预警｜基准+5min】` means the two measurements point in opposite directions.
+The message body repeats the direction and signed percentage for each measurement.
 
 ## Requirements
 

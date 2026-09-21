@@ -942,6 +942,15 @@ function formatSignedPct(value) {
   return `${value >= 0 ? "+" : ""}${value.toFixed(2)}%`;
 }
 
+function formatDirection(changePct) {
+  if (!Number.isFinite(changePct) || changePct === 0) {
+    return { symbol: "→", label: "持平" };
+  }
+  return changePct > 0
+    ? { symbol: "↑", label: "上涨" }
+    : { symbol: "↓", label: "下跌" };
+}
+
 function formatLocalTime(timestamp, timezone) {
   return new Intl.DateTimeFormat("zh-CN", {
     timeZone: timezone,
@@ -966,32 +975,52 @@ export function buildAlertMessage({
   test = false,
 }) {
   let title = "【BTC实时预警】";
-  if (test) title = "【BTC实时监测测试】";
-  else if (baseline?.triggered && rolling?.triggered) title = "【基准涨跌预警 + 5min滚动预警】";
-  else if (baseline?.triggered) title = "【基准涨跌预警】";
-  else if (rolling?.triggered) title = "【5min滚动预警】";
+  if (test) {
+    title = "【BTC监测测试】";
+  } else {
+    const triggered = [baseline?.triggered ? baseline : null, rolling?.triggered ? rolling : null]
+      .filter(Boolean);
+    if (triggered.length > 0) {
+      const directions = new Set(triggered.map((item) => formatDirection(item.changePct).symbol));
+      const triggerType = baseline?.triggered && rolling?.triggered
+        ? "基准+5min"
+        : baseline?.triggered ? "基准" : "5min";
+      if (directions.size === 1) {
+        const direction = formatDirection(triggered[0].changePct);
+        title = `【BTC ${direction.symbol}${direction.label}预警｜${triggerType}】`;
+      } else {
+        title = `【BTC ↕双向预警｜${triggerType}】`;
+      }
+    }
+  }
   const lines = [title];
   lines.push(`当前价格：$${formatPrice(price)}`);
 
   if (baseline?.triggered) {
-    const direction = baseline.changePct >= 0 ? "上涨" : "下跌";
+    const direction = formatDirection(baseline.changePct);
     lines.push(
-      `• 基准价：相对 $${formatPrice(baseline.price)} ${direction} ${Math.abs(baseline.changePct).toFixed(2)}%`
-      + `（${band.label}阈值 ${band.baselineThresholdPct.toFixed(1)}%）`,
+      `• 基准价方向：${direction.symbol} ${direction.label} ${formatSignedPct(baseline.changePct)}`
+      + `（相对基准 $${formatPrice(baseline.price)}；${band.label}阈值 ±${band.baselineThresholdPct.toFixed(1)}%）`,
     );
   }
 
   if (rolling?.triggered) {
-    const direction = rolling.changePct >= 0 ? "上涨" : "下跌";
+    const direction = formatDirection(rolling.changePct);
     lines.push(
-      `• 滚动5分钟：${direction} ${Math.abs(rolling.changePct).toFixed(2)}%`
-      + `（${band.label}阈值 ${band.rolling5mThresholdPct.toFixed(1)}%）`,
+      `• 5分钟方向：${direction.symbol} ${direction.label} ${formatSignedPct(rolling.changePct)}`
+      + `（${band.label}阈值 ±${band.rolling5mThresholdPct.toFixed(1)}%）`,
     );
   }
 
   if (test) {
-    if (baseline && !baseline.triggered) lines.push(`基准价变化：${formatSignedPct(baseline.changePct)}`);
-    if (rolling && !rolling.triggered) lines.push(`滚动5分钟变化：${formatSignedPct(rolling.changePct)}`);
+    if (baseline && !baseline.triggered) {
+      const direction = formatDirection(baseline.changePct);
+      lines.push(`基准价方向：${direction.symbol} ${direction.label} ${formatSignedPct(baseline.changePct)}`);
+    }
+    if (rolling && !rolling.triggered) {
+      const direction = formatDirection(rolling.changePct);
+      lines.push(`5分钟方向：${direction.symbol} ${direction.label} ${formatSignedPct(rolling.changePct)}`);
+    }
     lines.push("通知链路测试成功后，真实预警会使用同一通道发送。");
   } else {
     lines.push("已实时捕捉阈值穿越；请注意短线波动风险。");
