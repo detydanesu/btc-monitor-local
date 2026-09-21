@@ -1534,7 +1534,7 @@ export class RealtimeBtcMonitor {
         this.gateway = new QQBotGatewayClient(this.config.qqBot, this.qqClient, {
           onMessage: (eventType, message) => this.handleQQMessage(eventType, message),
           log: (message) => this.log(message),
-          onStateChange: () => { void this.persistRuntime("qq-gateway-state"); },
+          onStateChange: () => { void this.persistRuntime(this.stopping ? "stopped" : "running"); },
         });
         await this.gateway.start();
       } else if (this.config.qqBot.gatewayEnabled) {
