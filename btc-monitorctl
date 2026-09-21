@@ -38,6 +38,7 @@ Service commands:
   status           Show service status
   logs             Follow recent service logs
   menu|setup       Open the interactive control menu
+  gateway status   Show QQ Gateway online status
 
 Monitor commands:
   version          Show the installed source revision
@@ -152,6 +153,9 @@ const safe = {
   qqTarget: config.qqTarget ?? qq.target,
   qqBotApiBase: qq.apiBaseUrl,
   qqBotAuthUrl: qq.authUrl,
+  qqGatewayEnabled: qq.gatewayEnabled,
+  qqGatewayUrl: qq.gatewayUrl,
+  qqGatewayIntents: qq.gatewayIntents,
   telegramApiBase: telegram.apiBaseUrl,
   telegramChatId: telegram.chatId,
   telegramParseMode: telegram.parseMode,
@@ -165,6 +169,25 @@ for (const [key, value] of Object.entries(safe)) {
 }
 console.log("QQ Bot AppID and Client Secret: stored in the protected environment file");
 console.log("Telegram Bot token: stored in the protected environment file");
+NODE
+}
+
+show_gateway_status() {
+  CONFIG_PATH="$APP_DIR/data/realtime-status.json" "$NODE_BIN" <<'NODE'
+const fs = require("node:fs");
+const path = process.env.CONFIG_PATH;
+if (!fs.existsSync(path)) {
+  console.log("Runtime status is not available. Start the service first.");
+  process.exit(0);
+}
+const runtime = JSON.parse(fs.readFileSync(path, "utf8"));
+const gateway = runtime.qqGateway ?? {};
+console.log(`Service: ${runtime.status ?? "unknown"}`);
+console.log(`QQ Gateway: ${gateway.online ? "online" : "offline"}`);
+console.log(`Gateway ready: ${gateway.ready ? "yes" : "no"}`);
+console.log(`Last ready: ${gateway.lastReadyAt ?? "never"}`);
+console.log(`Last event: ${gateway.lastEventAt ?? "never"}`);
+if (gateway.lastError) console.log(`Last gateway error: ${gateway.lastError}`);
 NODE
 }
 
@@ -276,7 +299,8 @@ BTC Monitor control menu
   8) Select the active alert provider
   9) Baseline price
  10) Rules and configuration
- 11) View service logs
+  11) View service logs
+ 12) QQ Gateway status
   0) Exit
 EOF
     local choice
@@ -293,8 +317,9 @@ EOF
       9) baseline_menu ;;
       10) config_menu ;;
       11) run_menu_command "Service logs (Ctrl-C to return)" journalctl --user -u "$SERVICE" -n 100 -f ;;
+      12) run_menu_command "QQ Gateway status" show_gateway_status ;;
       0|q|Q) return 0 ;;
-      *) echo "Choose a number from 0 to 11." ;;
+      *) echo "Choose a number from 0 to 12." ;;
     esac
   done
 }
@@ -347,6 +372,18 @@ case "$command" in
     ;;
   logs)
     journalctl --user -u "$SERVICE" -n 100 -f "$@"
+    ;;
+  gateway)
+    case "${1:-}" in
+      status)
+        [[ $# -eq 1 ]] || { echo "Usage: btc-monitorctl gateway status" >&2; exit 2; }
+        show_gateway_status
+        ;;
+      *)
+        echo "Usage: btc-monitorctl gateway status" >&2
+        exit 2
+        ;;
+    esac
     ;;
   test-alert)
     test_alert "$@"

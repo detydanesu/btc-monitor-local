@@ -8,7 +8,10 @@
     "apiBaseUrl": "https://api.bot.qq.com",
     "authUrl": "https://api.bot.qq.com/app/getAppAccessToken",
     "appId": "",
-    "clientSecret": ""
+    "clientSecret": "",
+    "gatewayEnabled": true,
+    "gatewayUrl": "/gateway",
+    "gatewayIntents": 33554432
   },
   "telegramBot": {
     "apiBaseUrl": "https://api.telegram.org",

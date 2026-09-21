@@ -74,6 +74,22 @@ function asNonNegativeNumber(value, fallback, name) {
   return parsed;
 }
 
+function asNonNegativeInteger(value, fallback, name) {
+  const parsed = Number(value ?? fallback);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) {
+    throw new Error(`${name} must be a non-negative integer`);
+  }
+  return parsed;
+}
+
+function asBoolean(value, fallback, name) {
+  const text = String(value ?? "").trim().toLowerCase();
+  if (!text) return fallback;
+  if (["1", "true", "yes", "on"].includes(text)) return true;
+  if (["0", "false", "no", "off"].includes(text)) return false;
+  throw new Error(`${name} must be true or false`);
+}
+
 function resolveFrom(baseDir, value) {
   return path.isAbsolute(value) ? value : path.resolve(baseDir, value);
 }
@@ -124,6 +140,17 @@ export async function loadConfig(configPath = defaultConfigPath) {
       appId: configOrEnv(qqBotRaw.appId, "QQBOT_APP_ID"),
       clientSecret: configOrEnv(qqBotRaw.clientSecret, "QQBOT_CLIENT_SECRET"),
       target: configOrEnv(qqBotRaw.target, "QQBOT_TARGET", configOrEnv(raw.qqTarget, "QQBOT_TARGET", "")),
+      gatewayEnabled: asBoolean(
+        configOrEnv(qqBotRaw.gatewayEnabled, "QQBOT_GATEWAY_ENABLED", "true"),
+        true,
+        "qqBot.gatewayEnabled",
+      ),
+      gatewayUrl: configOrEnv(qqBotRaw.gatewayUrl, "QQBOT_GATEWAY_URL", "/gateway"),
+      gatewayIntents: asNonNegativeInteger(
+        configOrEnv(qqBotRaw.gatewayIntents, "QQBOT_GATEWAY_INTENTS", String(1 << 25)),
+        1 << 25,
+        "qqBot.gatewayIntents",
+      ),
     },
     telegramBot: {
       apiBaseUrl: String(
@@ -351,13 +378,23 @@ export class QQBotHttpClient {
   }
 
   async sendText(message) {
-    const { kind, openid } = parseQQTarget(this.config.target);
+    return this.sendTextTo(this.config.target, message);
+  }
+
+  async sendTextTo(target, message, { messageId = null } = {}) {
+    const { kind, openid } = parseQQTarget(target);
     const pathPart = kind === "group" ? "groups" : "users";
     const url = `${this.config.apiBaseUrl}/v2/${pathPart}/${encodeURIComponent(openid)}/messages`;
     const msgSeq = this.nextMessageSequence;
     this.nextMessageSequence = (this.nextMessageSequence % 65_535) + 1;
     const sendWithToken = async (forceRefresh) => {
       const token = await this.getAccessToken(forceRefresh);
+      const body = {
+        msg_type: 0,
+        content: String(message),
+        msg_seq: msgSeq,
+      };
+      if (messageId) body.msg_id = String(messageId);
       return this.requestJson(url, {
         method: "POST",
         headers: {
@@ -365,11 +402,7 @@ export class QQBotHttpClient {
           authorization: `QQBot ${token}`,
           "x-union-appid": String(this.config.appId ?? "").trim(),
         },
-        body: JSON.stringify({
-          msg_type: 0,
-          content: String(message),
-          msg_seq: msgSeq,
-        }),
+        body: JSON.stringify(body),
       });
     };
 
@@ -381,6 +414,301 @@ export class QQBotHttpClient {
       this.accessTokenExpiresAt = 0;
       return sendWithToken(true);
     }
+  }
+}
+
+function resolveQQGatewayUrl(apiBaseUrl, gatewayUrl) {
+  const configured = String(gatewayUrl ?? "").trim() || "/gateway";
+  if (/^https?:\/\//iu.test(configured)) return configured;
+  const base = String(apiBaseUrl ?? "https://api.bot.qq.com").replace(/\/$/u, "");
+  return `${base}/${configured.replace(/^\/+/u, "")}`;
+}
+
+function maskQQTarget(target) {
+  try {
+    const parsed = parseQQTarget(target);
+    const openid = parsed.openid;
+    return `${parsed.kind}:${openid.slice(0, 4)}...${openid.slice(-4)}`;
+  } catch {
+    return "unknown target";
+  }
+}
+
+function extractQQMessage(eventType, data, payload = {}) {
+  if (eventType === "C2C_MESSAGE_CREATE") {
+    const openid = data?.author?.user_openid ?? data?.user_openid ?? data?.author?.id;
+    if (!openid) return null;
+    return {
+      target: `c2c:${openid}`,
+      content: String(data?.content ?? ""),
+      messageId: data?.id ?? data?.msg_id ?? data?.message_id ?? payload?.id ?? null,
+    };
+  }
+
+  if (eventType === "GROUP_AT_MESSAGE_CREATE") {
+    const openid = data?.group_openid ?? data?.group_id;
+    if (!openid) return null;
+    return {
+      target: `group:${openid}`,
+      content: String(data?.content ?? ""),
+      messageId: data?.id ?? data?.msg_id ?? data?.message_id ?? payload?.id ?? null,
+    };
+  }
+
+  return null;
+}
+
+function normalizeQQCommand(content) {
+  const text = String(content ?? "")
+    .replace(/<@!?[^>]+>/gu, " ")
+    .trim()
+    .replace(/^[/!#]/u, "")
+    .trim()
+    .toLowerCase();
+  if (!text || /^(?:help|h|帮助|菜单|\?)$/u.test(text)) return "help";
+  if (/^(?:price|btc|行情|价格|实时|实时行情|现在)$/u.test(text)) return "price";
+  if (/^(?:status|state|状态|运行状态|在线)$/u.test(text)) return "status";
+  if (/^(?:baseline|基准|基准价|基准线)$/u.test(text)) return "baseline";
+  if (/^(?:rules|rule|规则|阈值)$/u.test(text)) return "rules";
+  if (/^(?:ping|心跳)$/u.test(text)) return "ping";
+  return null;
+}
+
+export class QQBotGatewayClient {
+  constructor(config, httpClient, { onMessage, log, onStateChange } = {}) {
+    this.config = config;
+    this.httpClient = httpClient;
+    this.onMessage = onMessage;
+    this.log = log ?? ((message) => console.log(message));
+    this.onStateChange = onStateChange ?? (() => {});
+    this.ws = null;
+    this.started = false;
+    this.stopping = false;
+    this.ready = false;
+    this.online = false;
+    this.seq = null;
+    this.sessionId = null;
+    this.heartbeatTimer = null;
+    this.reconnectTimer = null;
+    this.connecting = false;
+    this.reconnectDelayMs = 1_000;
+    this.reconnectCount = 0;
+    this.lastError = null;
+    this.lastEventAt = null;
+    this.lastReadyAt = null;
+  }
+
+  getStatus() {
+    return {
+      enabled: Boolean(this.config.gatewayEnabled),
+      online: this.online,
+      ready: this.ready,
+      reconnectCount: this.reconnectCount,
+      lastError: this.lastError,
+      lastEventAt: this.lastEventAt,
+      lastReadyAt: this.lastReadyAt,
+    };
+  }
+
+  updateState(patch = {}) {
+    Object.assign(this, patch);
+    try { this.onStateChange(this.getStatus()); } catch { /* state reporting must not stop the gateway */ }
+  }
+
+  async start() {
+    if (this.started) return;
+    this.started = true;
+    this.stopping = false;
+    void this.connect();
+  }
+
+  async getGateway() {
+    const token = await this.httpClient.getAccessToken();
+    const url = resolveQQGatewayUrl(this.config.apiBaseUrl, this.config.gatewayUrl);
+    const body = await this.httpClient.requestJson(url, {
+      method: "GET",
+      headers: { authorization: `QQBot ${token}` },
+    });
+    if (!body?.url) throw new Error("QQ Bot gateway response did not contain url");
+    return body;
+  }
+
+  async connect() {
+    if (this.stopping || !this.started || this.ws || this.connecting) return;
+    this.connecting = true;
+    try {
+      const gateway = await this.getGateway();
+      if (this.stopping || !this.started) return;
+      const ws = new WebSocket(String(gateway.url));
+      this.ws = ws;
+      this.connecting = false;
+      ws.addEventListener("open", () => {
+        if (this.ws !== ws || this.stopping) return;
+        this.log("QQ Gateway WebSocket connected; waiting for Hello");
+      });
+      ws.addEventListener("message", (event) => {
+        if (this.ws !== ws || this.stopping) return;
+        void this.handlePayload(event.data).catch((error) => {
+          this.lastError = `QQ Gateway message error: ${String(error?.message ?? error)}`;
+          this.log(this.lastError);
+          this.onStateChange(this.getStatus());
+        });
+      });
+      ws.addEventListener("error", () => {
+        if (this.ws !== ws || this.stopping) return;
+        this.lastError = "QQ Gateway WebSocket error";
+        this.log(this.lastError);
+        this.onStateChange(this.getStatus());
+      });
+      ws.addEventListener("close", (event) => {
+        if (this.ws !== ws) return;
+        this.clearHeartbeat();
+        this.ws = null;
+        this.connecting = false;
+        this.ready = false;
+        this.online = false;
+        if (this.stopping) {
+          this.onStateChange(this.getStatus());
+          return;
+        }
+        this.lastError = `QQ Gateway closed (${event.code}${event.reason ? `: ${event.reason}` : ""})`;
+        this.log(this.lastError);
+        this.onStateChange(this.getStatus());
+        this.scheduleReconnect();
+      });
+    } catch (error) {
+      this.connecting = false;
+      this.lastError = `QQ Gateway connection failed: ${String(error?.message ?? error)}`;
+      this.log(this.lastError);
+      this.onStateChange(this.getStatus());
+      this.scheduleReconnect();
+    }
+  }
+
+  async handlePayload(raw) {
+    const payload = JSON.parse(typeof raw === "string" ? raw : raw.toString());
+    if (Number.isFinite(Number(payload?.s))) this.seq = Number(payload.s);
+    const opcode = Number(payload?.op);
+    if (opcode === 10) {
+      const interval = Number(payload?.d?.heartbeat_interval);
+      if (!Number.isFinite(interval) || interval <= 0) throw new Error("QQ Gateway Hello did not contain heartbeat_interval");
+      this.startHeartbeat(interval);
+      await this.authenticate();
+      return;
+    }
+    if (opcode === 0) {
+      this.lastEventAt = new Date().toISOString();
+      if (payload.t === "READY") {
+        this.sessionId = String(payload?.d?.session_id ?? "") || null;
+        this.ready = true;
+        this.online = true;
+        this.reconnectDelayMs = 1_000;
+        this.lastError = null;
+        this.lastReadyAt = this.lastEventAt;
+        this.log("QQ Gateway is online and ready for commands");
+        this.onStateChange(this.getStatus());
+        return;
+      }
+      if (payload.t === "RESUMED") {
+        this.ready = true;
+        this.online = true;
+        this.reconnectDelayMs = 1_000;
+        this.lastError = null;
+        this.lastReadyAt = this.lastEventAt;
+        this.log("QQ Gateway session resumed");
+        this.onStateChange(this.getStatus());
+        return;
+      }
+      if (extractQQMessage(payload.t, payload.d, payload)) {
+        const message = extractQQMessage(payload.t, payload.d, payload);
+        if (this.onMessage) await this.onMessage(payload.t, message, payload);
+      }
+      return;
+    }
+    if (opcode === 7) {
+      this.log("QQ Gateway requested reconnect");
+      this.closeSocket(4000, "gateway reconnect");
+      return;
+    }
+    if (opcode === 9) {
+      this.sessionId = null;
+      this.seq = null;
+      this.log("QQ Gateway rejected the session; starting a fresh login");
+      this.closeSocket(4001, "invalid session");
+    }
+  }
+
+  async authenticate() {
+    if (!this.ws || this.stopping) return;
+    const token = await this.httpClient.getAccessToken();
+    if (this.sessionId && Number.isFinite(this.seq)) {
+      this.ws.send(JSON.stringify({
+        op: 6,
+        d: { token: `QQBot ${token}`, session_id: this.sessionId, seq: this.seq },
+      }));
+      this.log("QQ Gateway resume sent");
+      return;
+    }
+    this.ws.send(JSON.stringify({
+      op: 2,
+      d: {
+        token: `QQBot ${token}`,
+        intents: this.config.gatewayIntents,
+        shard: [0, 1],
+        properties: { $os: "linux", $browser: "btc-monitor-local", $device: "btc-monitor-local" },
+      },
+    }));
+    this.log("QQ Gateway identify sent");
+  }
+
+  startHeartbeat(intervalMs) {
+    this.clearHeartbeat();
+    const send = () => {
+      if (!this.ws || this.stopping || this.ws.readyState !== 1) return;
+      this.ws.send(JSON.stringify({ op: 1, d: this.seq }));
+    };
+    send();
+    this.heartbeatTimer = setInterval(send, intervalMs);
+  }
+
+  clearHeartbeat() {
+    if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
+    this.heartbeatTimer = null;
+  }
+
+  closeSocket(code, reason) {
+    if (!this.ws) return;
+    const ws = this.ws;
+    this.ready = false;
+    this.online = false;
+    this.clearHeartbeat();
+    try { ws.close(code, reason); } catch { /* no-op */ }
+  }
+
+  scheduleReconnect() {
+    if (this.stopping || !this.started || this.reconnectTimer) return;
+    const jitter = Math.floor(Math.random() * Math.min(500, this.reconnectDelayMs / 4));
+    const delay = this.reconnectDelayMs + jitter;
+    this.reconnectCount += 1;
+    this.log(`Reconnecting QQ Gateway in ${delay}ms`);
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      void this.connect();
+    }, delay);
+    this.reconnectDelayMs = Math.min(this.reconnectDelayMs * 2, 30_000);
+  }
+
+  async stop() {
+    this.stopping = true;
+    this.started = false;
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
+    this.clearHeartbeat();
+    this.connecting = false;
+    this.closeSocket(1000, "service stopping");
+    this.ready = false;
+    this.online = false;
+    this.onStateChange(this.getStatus());
   }
 }
 
@@ -708,6 +1036,7 @@ export class RealtimeBtcMonitor {
     this.lockOwned = false;
     this.qqClient = new QQBotHttpClient(config.qqBot, config.messageTimeoutMs);
     this.telegramClient = new TelegramBotHttpClient(config.telegramBot, config.messageTimeoutMs);
+    this.gateway = null;
   }
 
   log(message) {
@@ -947,6 +1276,117 @@ export class RealtimeBtcMonitor {
     this.log("Test alert delivered without changing alert state");
   }
 
+  async getFreshQuerySnapshot() {
+    const latestAgeMs = this.latest ? Date.now() - this.latest.timestamp : Number.POSITIVE_INFINITY;
+    if (this.latest && latestAgeMs <= Math.max(5_000, this.config.restFallbackIntervalMs * 2)) {
+      return this.latest;
+    }
+
+    try {
+      const snapshot = await this.fetchRestSnapshot();
+      this.history.replace(snapshot.samples);
+      this.recordPrice(snapshot.timestamp, snapshot.price, "rest", true);
+      return this.latest;
+    } catch (error) {
+      if (this.latest) return this.latest;
+      throw error;
+    }
+  }
+
+  isAuthorizedQQTarget(target) {
+    try {
+      const configured = parseQQTarget(this.config.qqBot.target);
+      const incoming = parseQQTarget(target);
+      return configured.kind === incoming.kind && configured.openid === incoming.openid;
+    } catch {
+      return false;
+    }
+  }
+
+  async buildQQQueryReply(command) {
+    if (command === "help") {
+      return [
+        "【BTC机器人命令】",
+        "价格 / price：当前 BTC/USDT 价格和最近5分钟变化",
+        "状态 / status：监控、Binance 和 QQ 网关状态",
+        "基准 / baseline：查看当前基准价",
+        "规则 / rules：查看当前时段的预警阈值",
+        "ping：检查机器人是否在线",
+      ].join("\n");
+    }
+
+    const snapshot = await this.getFreshQuerySnapshot();
+    const { timestamp, price, source } = snapshot;
+    const baselinePrice = Number(this.baseline.baselinePrice);
+    const baselineChangePct = Number.isFinite(baselinePrice) && baselinePrice > 0
+      ? ((price - baselinePrice) / baselinePrice) * 100
+      : null;
+    const rollingChangePct = this.history.changePct(timestamp, price)?.changePct ?? null;
+    const band = getRuleBand(new Date(timestamp), this.config);
+    const gatewayOnline = this.gateway?.online ? "在线" : "离线";
+    const binanceOnline = this.connected ? "WebSocket 已连接" : "REST 后备通道";
+
+    if (command === "ping") {
+      return `QQ 网关：${gatewayOnline}\n监控服务：运行中\n时间：${formatLocalTime(timestamp, this.config.timezone)}（${this.config.timezone}）`;
+    }
+
+    if (command === "baseline") {
+      return [
+        "【BTC基准价】",
+        `基准价：${Number.isFinite(baselinePrice) ? `$${formatPrice(baselinePrice)}` : "未设置"}`,
+        `当前价：$${formatPrice(price)}`,
+        `相对变化：${baselineChangePct === null ? "未知" : formatSignedPct(baselineChangePct)}`,
+        `当前时段：${band.label}（基准阈值 ±${band.baselineThresholdPct.toFixed(1)}%）`,
+        `时间：${formatLocalTime(timestamp, this.config.timezone)}（${this.config.timezone}）`,
+      ].join("\n");
+    }
+
+    if (command === "rules") {
+      return [
+        "【BTC预警规则】",
+        `当前时段：${band.label}`,
+        `基准价预警：±${band.baselineThresholdPct.toFixed(1)}%`,
+        `滚动5分钟预警：±${band.rolling5mThresholdPct.toFixed(1)}%`,
+        `滚动预警重置：低于阈值的 ${(this.config.rollingRearmRatio * 100).toFixed(0)}%`,
+        `当前基准价：${Number.isFinite(baselinePrice) ? `$${formatPrice(baselinePrice)}` : "未设置"}`,
+      ].join("\n");
+    }
+
+    if (command === "status") {
+      return [
+        "【BTC监控状态】",
+        "监控服务：运行中",
+        `Binance：${binanceOnline}`,
+        `QQ 网关：${gatewayOnline}`,
+        `最近预警：${this.runtime.lastAlertAt ?? "暂无"}`,
+        `当前价格：$${formatPrice(price)}`,
+        `时间：${formatLocalTime(timestamp, this.config.timezone)}（${this.config.timezone}）`,
+      ].join("\n");
+    }
+
+    return [
+      "【BTC实时信息】",
+      `当前价格：$${formatPrice(price)}`,
+      `相对基准价：${baselineChangePct === null ? "未知" : formatSignedPct(baselineChangePct)}`,
+      `最近5分钟：${rollingChangePct === null ? "暂无足够数据" : formatSignedPct(rollingChangePct)}`,
+      `当前规则：${band.label}，基准 ±${band.baselineThresholdPct.toFixed(1)}%，5分钟 ±${band.rolling5mThresholdPct.toFixed(1)}%`,
+      `数据源：Binance ${source === "websocket" ? "WebSocket" : "REST 后备通道"}`,
+      `时间：${formatLocalTime(timestamp, this.config.timezone)}（${this.config.timezone}）`,
+    ].join("\n");
+  }
+
+  async handleQQMessage(eventType, message) {
+    if (!message || !this.isAuthorizedQQTarget(message.target)) {
+      if (message) this.log(`Ignoring QQ command from ${maskQQTarget(message.target)}`);
+      return;
+    }
+    const command = normalizeQQCommand(message.content);
+    if (!command) return;
+    const reply = await this.buildQQQueryReply(command);
+    await this.qqClient.sendTextTo(message.target, reply, { messageId: message.messageId });
+    this.log(`QQ command answered: ${command} -> ${maskQQTarget(message.target)}`);
+  }
+
   async refreshRestFallback() {
     if (
       this.restInFlight
@@ -1068,6 +1508,15 @@ export class RealtimeBtcMonitor {
       lastError: this.runtime.lastError ?? null,
       lastAlertAt: this.runtime.lastAlertAt ?? null,
       lastAlertFingerprint: this.runtime.lastAlertFingerprint ?? null,
+      qqGateway: this.gateway?.getStatus() ?? {
+        enabled: false,
+        online: false,
+        ready: false,
+        reconnectCount: 0,
+        lastError: null,
+        lastEventAt: null,
+        lastReadyAt: null,
+      },
       rolling,
       current: this.runtime.current ?? null,
     };
@@ -1081,6 +1530,16 @@ export class RealtimeBtcMonitor {
     await this.acquireLock();
     try {
       await this.initialize({ evaluate: false });
+      if (this.config.qqBot.gatewayEnabled && this.config.qqBot.appId && this.config.qqBot.clientSecret) {
+        this.gateway = new QQBotGatewayClient(this.config.qqBot, this.qqClient, {
+          onMessage: (eventType, message) => this.handleQQMessage(eventType, message),
+          log: (message) => this.log(message),
+          onStateChange: () => { void this.persistRuntime("qq-gateway-state"); },
+        });
+        await this.gateway.start();
+      } else if (this.config.qqBot.gatewayEnabled) {
+        this.log("QQ Gateway disabled: QQ Bot AppID and Client Secret are not available");
+      }
       this.connectWebSocket();
       this.evaluationInFlight = true;
       try {
@@ -1166,6 +1625,7 @@ export class RealtimeBtcMonitor {
     for (const timer of [this.reconnectTimer, this.fallbackTimer, this.healthTimer, this.staleTimer]) {
       if (timer) clearTimeout(timer);
     }
+    if (this.gateway) await this.gateway.stop();
     if (this.ws) {
       try { this.ws.close(1000, "service stopping"); } catch { /* no-op */ }
     }

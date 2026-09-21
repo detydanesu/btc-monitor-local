@@ -103,6 +103,49 @@ btc-monitorctl menu
 Client Secret 作为迁移默认值；目标 OpenID 仍需确认。
 QQ Bot 主动消息还受 QQ 平台的权限、用户接收设置和频率限制影响。
 
+### QQ 在线状态与实时查询
+
+预警发送和 QQ 在线状态使用两条链路。预警通过 HTTPS 发送；QQ 在线状态和接收
+命令需要监控服务保持 QQ Gateway WebSocket 长连接。导入 QQ Bot 凭据后，服务默认
+开启这个连接，并在网络中断后自动重连。
+
+默认订阅 `GROUP_AND_C2C_EVENT`，支持 C2C 私聊和群内 @机器人消息。请在 QQ 开放平台
+管理端开启对应事件权限。配置的 `QQBOT_TARGET` 同时作为命令白名单，其他用户或群的
+命令会被忽略。
+
+服务运行后，可以给机器人发送以下命令：
+
+```text
+价格       或  price
+状态       或  status
+基准       或  baseline
+规则       或  rules
+帮助       或  help
+ping
+```
+
+机器人会回复当前 BTC 价格、相对基准价变化、最近五分钟变化、当前阈值、数据来源和
+服务状态。终端中可以查看网关连接状态：
+
+```bash
+btc-monitorctl gateway status
+```
+
+也可以通过环境变量或 `config.json` 调整网关：
+
+```json
+{
+  "qqBot": {
+    "gatewayEnabled": true,
+    "gatewayUrl": "/gateway",
+    "gatewayIntents": 33554432
+  }
+}
+```
+
+`33554432` 等于 `1 << 25`，对应官方的 `GROUP_AND_C2C_EVENT` 事件订阅。服务不会
+登录普通 QQ 客户端；机器人通过 Gateway 长连接保持在线。
+
 也可以选择 Telegram Bot：
 
 ```bash

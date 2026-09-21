@@ -167,7 +167,58 @@ The application also accepts these environment variables, which override matchin
 | `QQBOT_TARGET` | `c2c:OPENID` or `group:OPENID` |
 | `QQBOT_API_BASE` | API base URL; default `https://api.bot.qq.com` |
 | `QQBOT_AUTH_URL` | Token URL; default `https://api.bot.qq.com/app/getAppAccessToken` |
+| `QQBOT_GATEWAY_ENABLED` | Keep the incoming-command Gateway enabled; default `true` |
+| `QQBOT_GATEWAY_URL` | Gateway discovery path or URL; default `/gateway` |
+| `QQBOT_GATEWAY_INTENTS` | Gateway event bitmask; default `33554432` (`1 << 25`) |
 | `BTC_ALERT_PROVIDER` | Alert provider; default `qqbot-http` |
+
+### QQ online status and live queries
+
+The alert sender and the QQ online status are separate paths. Alerts use HTTPS, while
+QQ online status and incoming commands require the monitor to keep a QQ Gateway
+WebSocket connected. When QQ Bot credentials are available, the service enables this
+connection by default and reconnects it after a network interruption.
+
+The default subscription is `GROUP_AND_C2C_EVENT`, which covers C2C private messages
+and group messages that mention the bot. Enable the corresponding event permission in
+the QQ Open Platform console. The configured `QQBOT_TARGET` is also used as the
+allowlist: commands from another user or group are ignored.
+
+After the service is running, send one of these messages to the bot:
+
+```text
+价格       or  price
+状态       or  status
+基准       or  baseline
+规则       or  rules
+帮助       or  help
+ping
+```
+
+The bot replies with the current BTC price, baseline change, rolling five-minute
+change, active thresholds, data source, and service status. Check the connection from
+the shell with:
+
+```bash
+btc-monitorctl gateway status
+```
+
+Gateway settings can be disabled or changed through environment variables or
+`config.json`:
+
+```json
+{
+  "qqBot": {
+    "gatewayEnabled": true,
+    "gatewayUrl": "/gateway",
+    "gatewayIntents": 33554432
+  }
+}
+```
+
+`33554432` is `1 << 25`, the official `GROUP_AND_C2C_EVENT` intent. The monitor does
+not log in to a QQ client; the official bot account is online through the Gateway
+connection only.
 
 ### Telegram Bot
 
